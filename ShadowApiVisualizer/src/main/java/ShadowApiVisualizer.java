@@ -1,8 +1,12 @@
 import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.core.ToolType;
 import burp.api.montoya.http.handler.*;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.logging.Logging;
+import burp.api.montoya.scanner.audit.issues.AuditIssue;
+import burp.api.montoya.scanner.audit.issues.AuditIssueConfidence;
+import burp.api.montoya.scanner.audit.issues.AuditIssueSeverity;
 import burp.api.montoya.ui.editor.EditorOptions;
 import burp.api.montoya.ui.editor.HttpRequestEditor;
 
@@ -12,27 +16,35 @@ import java.awt.*;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class ShadowApiVisualizer implements BurpExtension {
 
+    private MontoyaApi api;
+    private ShadowSettings settings;
+    private Map<String, DefaultMutableTreeNode> nodeMap;
+    private DefaultTreeModel treeModel;
+    private DefaultMutableTreeNode root;
+
     @Override
     public void initialize(MontoyaApi api) {
+        this.api = api;
         api.extension().setName("Shadow API Visualizer");
 
-        // --- DATA STRUCTURES ---
-        // Map to keep track of unique paths and their nodes (for deduplication and updating)
-        Map<String, DefaultMutableTreeNode> nodeMap = new ConcurrentHashMap<>();
+        // --- DATA & SETTINGS ---
+        nodeMap = new ConcurrentHashMap<>();
+        settings = new ShadowSettings();
 
         // --- UI COMPONENTS ---
-        DefaultMutableTreeNode root = new DefaultMutableTreeNode("API Target (Root)");
-        DefaultTreeModel treeModel = new DefaultTreeModel(root);
+        root = new DefaultMutableTreeNode("API Target (Root)");
+        treeModel = new DefaultTreeModel(root);
         JTree apiTree = new JTree(treeModel);
-
-        // FEATURE 2: Custom Renderer for Color Coding
         apiTree.setCellRenderer(new ShadowRenderer());
 
         HttpRequestEditor requestEditor = api.userInterface().createHttpRequestEditor(EditorOptions.READ_ONLY);
@@ -44,20 +56,22 @@ public class ShadowApiVisualizer implements BurpExtension {
         editorsTab.addTab("Request", requestEditor.uiComponent());
         editorsTab.addTab("Found In (Source)", new JScrollPane(responseArea));
 
-        // --- FEATURE 3: CONTEXT MENU (Right Click) ---
+        // --- CONTEXT MENU ---
         JPopupMenu popupMenu = new JPopupMenu();
         JMenuItem copyItem = new JMenuItem("Copy Path");
         JMenuItem sendRepeaterItem = new JMenuItem("Send Request to Repeater");
+        JMenuItem deleteItem = new JMenuItem("Delete / Ignore");
 
         popupMenu.add(copyItem);
         popupMenu.add(sendRepeaterItem);
+        popupMenu.addSeparator();
+        popupMenu.add(deleteItem);
 
         apiTree.addMouseListener(new MouseAdapter() {
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
                     int row = apiTree.getClosestRowForLocation(e.getX(), e.getY());
                     apiTree.setSelectionRow(row);
-
                     DefaultMutableTreeNode node = (DefaultMutableTreeNode) apiTree.getLastSelectedPathComponent();
                     if (node != null && node.getUserObject() instanceof ShadowFinding) {
                         popupMenu.show(e.getComponent(), e.getX(), e.getY());
@@ -66,7 +80,6 @@ public class ShadowApiVisualizer implements BurpExtension {
             }
         });
 
-        // Context Menu Actions
         copyItem.addActionListener(e -> {
             DefaultMutableTreeNode node = (DefaultMutableTreeNode) apiTree.getLastSelectedPathComponent();
             if (node != null && node.getUserObject() instanceof ShadowFinding) {
@@ -79,9 +92,16 @@ public class ShadowApiVisualizer implements BurpExtension {
             DefaultMutableTreeNode node = (DefaultMutableTreeNode) apiTree.getLastSelectedPathComponent();
             if (node != null && node.getUserObject() instanceof ShadowFinding) {
                 ShadowFinding finding = (ShadowFinding) node.getUserObject();
-                // Send the ORIGINAL request where we found the JS file, but ideally you'd want to construct a NEW request to the shadow endpoint.
-                // For now, let's send the traffic where we found it, so the user can analyze context.
                 api.repeater().sendToRepeater(finding.requestResponse.request(), "Shadow Finding");
+            }
+        });
+
+        deleteItem.addActionListener(e -> {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode) apiTree.getLastSelectedPathComponent();
+            if (node != null && node.getUserObject() instanceof ShadowFinding) {
+                ShadowFinding finding = (ShadowFinding) node.getUserObject();
+                nodeMap.remove(finding.path);
+                treeModel.removeNodeFromParent(node);
             }
         });
 
@@ -101,41 +121,135 @@ public class ShadowApiVisualizer implements BurpExtension {
             }
         });
 
+        // --- DASHBOARD PANEL ---
         JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(apiTree), editorsTab);
         splitPane.setDividerLocation(300);
-        api.userInterface().registerSuiteTab("Shadow Visualizer", splitPane);
+
+        JPanel dashboardPanel = new JPanel(new BorderLayout());
+        JToolBar toolBar = new JToolBar();
+        JButton exportBtn = new JButton("Export All to Clipboard");
+        JButton clearBtn = new JButton("Clear All");
+        
+        exportBtn.addActionListener(e -> {
+            String result = nodeMap.keySet().stream().collect(Collectors.joining("\n"));
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(result), null);
+            JOptionPane.showMessageDialog(dashboardPanel, "Copied " + nodeMap.size() + " paths to clipboard.");
+        });
+        
+        clearBtn.addActionListener(e -> {
+            nodeMap.clear();
+            root.removeAllChildren();
+            treeModel.reload();
+        });
+
+        toolBar.add(exportBtn);
+        toolBar.add(clearBtn);
+        dashboardPanel.add(toolBar, BorderLayout.NORTH);
+        dashboardPanel.add(splitPane, BorderLayout.CENTER);
+
+        // --- SETTINGS PANEL ---
+        JPanel settingsPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 0; gbc.gridy = 0;
+        
+        JCheckBox scopeOnlyCheck = new JCheckBox("Only Analyze In-Scope Traffic", settings.scopeOnly);
+        scopeOnlyCheck.addActionListener(e -> settings.scopeOnly = scopeOnlyCheck.isSelected());
+        settingsPanel.add(scopeOnlyCheck, gbc);
+
+        gbc.gridy++;
+        settingsPanel.add(new JLabel("Regex Pattern (One per line):"), gbc);
+        
+        gbc.gridy++;
+        JTextArea regexArea = new JTextArea(10, 40);
+        regexArea.setText(String.join("\n", settings.regexList));
+        settingsPanel.add(new JScrollPane(regexArea), gbc);
+
+        gbc.gridy++;
+        JButton saveSettingsBtn = new JButton("Update Regex");
+        saveSettingsBtn.addActionListener(e -> {
+            settings.updateRegex(regexArea.getText());
+            JOptionPane.showMessageDialog(settingsPanel, "Regex Updated!");
+        });
+        settingsPanel.add(saveSettingsBtn, gbc);
+
+        // --- MAIN TABS ---
+        JTabbedPane mainTabs = new JTabbedPane();
+        mainTabs.addTab("Dashboard", dashboardPanel);
+        mainTabs.addTab("Settings", settingsPanel);
+
+        api.userInterface().registerSuiteTab("Shadow Visualizer", mainTabs);
 
         // Register Watcher
-        api.http().registerHttpHandler(new TrafficWatcher(api, root, treeModel, nodeMap));
-        api.logging().logToOutput("Shadow API Visualizer: Deduplication & Context Menus Active!");
+        api.http().registerHttpHandler(new TrafficWatcher(api, root, treeModel, nodeMap, settings));
+        api.logging().logToOutput("Shadow API Visualizer: Enhanced Version Loaded!");
     }
 }
 
-// --- CUSTOM CLASSES ---
+// --- SETTINGS CLASS ---
+class ShadowSettings {
+    public boolean scopeOnly = false;
+    public List<String> regexList = new ArrayList<>();
+    public Pattern combinedPattern;
 
-// 1. Data Object
+    public ShadowSettings() {
+        // Default Regex
+        regexList.add("['\"](\\/api\\/[a-zA-Z0-9_\\-\\/{}]+)['\"]");
+        regexList.add("['\"](\\/v1\\/[a-zA-Z0-9_\\-\\/{}]+)['\"]");
+        regexList.add("['\"](\\/graphql[a-zA-Z0-9_\\-\\/]*)['\"]");
+        updateRegex(String.join("\n", regexList));
+    }
+
+    public void updateRegex(String text) {
+        regexList.clear();
+        List<String> parts = new ArrayList<>();
+        for (String line : text.split("\n")) {
+            if (!line.trim().isEmpty()) {
+                regexList.add(line.trim());
+                // Extract the inner group if possible, or just use the line
+                // We assume the user provides a regex that captures the path in group 1
+                // If they provide a simple string, we might need to wrap it, but let's trust the user or default
+                parts.add(line.trim());
+            }
+        }
+        // Combine into one pattern with OR
+        String combined = String.join("|", parts);
+        try {
+            combinedPattern = Pattern.compile(combined);
+        } catch (Exception e) {
+            // Fallback
+            combinedPattern = Pattern.compile("['\"](\\/api\\/[a-zA-Z0-9_\\-/]+)['\"]");
+        }
+    }
+}
+
+// --- DATA OBJECT ---
 class ShadowFinding {
     public String path;
+    public String method; // GET, POST, etc.
     public HttpRequestResponse requestResponse;
     public int start;
     public int end;
-    public boolean isLive; // New: Tracks if we have seen this in real traffic
+    public boolean isLive;
 
-    public ShadowFinding(String path, HttpRequestResponse requestResponse, int start, int end) {
+    public ShadowFinding(String path, String method, HttpRequestResponse requestResponse, int start, int end) {
         this.path = path;
+        this.method = method;
         this.requestResponse = requestResponse;
         this.start = start;
         this.end = end;
-        this.isLive = false; // Default to Shadow (Red)
+        this.isLive = false;
     }
 
     @Override
     public String toString() {
-        return path + (isLive ? " [Verified]" : " [Shadow]");
+        String prefix = method != null ? "[" + method + "] " : "";
+        return prefix + path + (isLive ? " [Verified]" : " [Shadow]");
     }
 }
 
-// 2. Custom Renderer (Colors)
+// --- CUSTOM RENDERER ---
 class ShadowRenderer extends DefaultTreeCellRenderer {
     @Override
     public Component getTreeCellRendererComponent(JTree tree, Object value, boolean sel, boolean expanded, boolean leaf, int row, boolean hasFocus) {
@@ -145,35 +259,40 @@ class ShadowRenderer extends DefaultTreeCellRenderer {
         if (node.getUserObject() instanceof ShadowFinding) {
             ShadowFinding finding = (ShadowFinding) node.getUserObject();
             if (finding.isLive) {
-                setForeground(new Color(0, 128, 0)); // Green for Verified/Live
+                setForeground(new Color(0, 128, 0)); // Green
             } else {
-                setForeground(Color.RED); // Red for Shadow/Hidden
+                setForeground(Color.RED); // Red
             }
+            
+            // Optional: Add icon based on method?
+            // For now, text color is sufficient.
         }
         return this;
     }
 }
 
-// 3. Traffic Watcher
+// --- TRAFFIC WATCHER ---
 class TrafficWatcher implements HttpHandler {
 
+    private final MontoyaApi api;
     private final Logging logging;
-    private final Pattern apiPattern = Pattern.compile("['\"](\\/api\\/[a-zA-Z0-9_\\-/]+|\\/v1\\/[a-zA-Z0-9_\\-/]+)['\"]");
-
     private final DefaultMutableTreeNode rootNode;
     private final DefaultTreeModel treeModel;
-    private final Map<String, DefaultMutableTreeNode> nodeMap; // For Deduplication
+    private final Map<String, DefaultMutableTreeNode> nodeMap;
+    private final ShadowSettings settings;
 
-    public TrafficWatcher(MontoyaApi api, DefaultMutableTreeNode rootNode, DefaultTreeModel treeModel, Map<String, DefaultMutableTreeNode> nodeMap) {
+    public TrafficWatcher(MontoyaApi api, DefaultMutableTreeNode rootNode, DefaultTreeModel treeModel, Map<String, DefaultMutableTreeNode> nodeMap, ShadowSettings settings) {
+        this.api = api;
         this.logging = api.logging();
         this.rootNode = rootNode;
         this.treeModel = treeModel;
         this.nodeMap = nodeMap;
+        this.settings = settings;
     }
 
     @Override
     public RequestToBeSentAction handleHttpRequestToBeSent(HttpRequestToBeSent requestToBeSent) {
-        // Feature 2 Logic: Check if we are visiting a path that is in our tree
+        // Feature: Live Verification
         String currentPath = requestToBeSent.path();
 
         if (nodeMap.containsKey(currentPath)) {
@@ -181,9 +300,7 @@ class TrafficWatcher implements HttpHandler {
             ShadowFinding finding = (ShadowFinding) node.getUserObject();
 
             if (!finding.isLive) {
-                finding.isLive = true; // Mark as Verified
-
-                // Update the UI
+                finding.isLive = true;
                 SwingUtilities.invokeLater(() -> treeModel.nodeChanged(node));
                 logging.logToOutput("[*] Verified Shadow API: " + currentPath);
             }
@@ -193,23 +310,32 @@ class TrafficWatcher implements HttpHandler {
 
     @Override
     public ResponseReceivedAction handleHttpResponseReceived(HttpResponseReceived responseReceived) {
+        // Feature: Scope Check
+        if (settings.scopeOnly && !api.scope().isInScope(responseReceived.initiatingRequest().url())) {
+            return ResponseReceivedAction.continueWith(responseReceived);
+        }
+
         boolean isJS = responseReceived.inferredMimeType().name().contains("SCRIPT") ||
-                responseReceived.bodyToString().contains("function ");
+                responseReceived.bodyToString().contains("function ") || 
+                responseReceived.bodyToString().contains("const ");
 
         if (isJS) {
             String body = responseReceived.bodyToString();
-            Matcher matcher = apiPattern.matcher(body);
+            Matcher matcher = settings.combinedPattern.matcher(body);
 
             while (matcher.find()) {
-                String foundPath = matcher.group(1);
+                // We assume the path is in the first capturing group
+                String foundPath = matcher.groupCount() >= 1 ? matcher.group(1) : matcher.group();
 
-                // Feature 1: Deduplication
                 if (nodeMap.containsKey(foundPath)) {
-                    continue; // Skip if we already found this
+                    continue;
                 }
 
-                int start = matcher.start(1);
-                int end = matcher.end(1);
+                int start = matcher.start();
+                int end = matcher.end();
+
+                // Feature: Method Inference
+                String method = inferMethod(body, start);
 
                 HttpRequestResponse storedTraffic = HttpRequestResponse.httpRequestResponse(
                         responseReceived.initiatingRequest(),
@@ -217,20 +343,34 @@ class TrafficWatcher implements HttpHandler {
                 );
 
                 SwingUtilities.invokeLater(() -> {
-                    // Double check inside UI thread to be safe
                     if (!nodeMap.containsKey(foundPath)) {
-                        ShadowFinding finding = new ShadowFinding(foundPath, storedTraffic, start, end);
+                        ShadowFinding finding = new ShadowFinding(foundPath, method, storedTraffic, start, end);
                         DefaultMutableTreeNode newNode = new DefaultMutableTreeNode(finding);
 
-                        nodeMap.put(foundPath, newNode); // Add to deduplication map
+                        nodeMap.put(foundPath, newNode);
                         rootNode.add(newNode);
                         treeModel.reload();
+                        
+                        // Feature: Burp Issue (Best Effort)
+                        // We can't easily add issues to the dashboard from HttpHandler in Montoya without ScanCheck
+                        // But we can log it.
                     }
                 });
-
-                logging.logToOutput("[+] Found New Shadow API: " + foundPath);
             }
         }
         return ResponseReceivedAction.continueWith(responseReceived);
+    }
+
+    private String inferMethod(String body, int index) {
+        // Look backwards 50 chars for keywords
+        int lookBack = Math.max(0, index - 50);
+        String context = body.substring(lookBack, index).toLowerCase();
+        
+        if (context.contains("post") || context.contains("axios.post")) return "POST";
+        if (context.contains("get") || context.contains("axios.get")) return "GET";
+        if (context.contains("put") || context.contains("axios.put")) return "PUT";
+        if (context.contains("delete") || context.contains("axios.delete")) return "DELETE";
+        
+        return null; // Unknown
     }
 }
