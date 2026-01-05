@@ -1,5 +1,8 @@
 # Shadow API Visualizer (Burp Suite Extension)
 
+![Java](https://img.shields.io/badge/Java-ED8B00?style=for-the-badge&logo=java&logoColor=white) ![Burp Suite](https://img.shields.io/badge/Burp_Suite-FF6633?style=for-the-badge&logo=burpsuite&logoColor=white) ![Security](https://img.shields.io/badge/Cybersecurity-Bug_Bounty-red?style=for-the-badge)
+
+
 Shadow API Visualizer is a Burp Suite extension designed to help bug hunters and penetration testers discover hidden, unused, or "shadow" API endpoints by statically analyzing client-side code in real-time.
 
 ## Description
@@ -85,3 +88,19 @@ The current regex used to discover endpoints is:
 
 https://github.com/user-attachments/assets/41c4552b-6bdf-468b-8b5d-e42bf8602c35
 
+Disclaimer
+----------
+
+This tool is for educational purposes and authorized security testing only. Do not use this tool on systems you do not have permission to test. The author is not responsible for any misuse.
+---
+
+<div align="center">
+  <h3>☕ Support My Journey</h3>
+</div>
+
+
+<div align="center">
+  <a href="https://www.buymeacoffee.com/tobiasguta">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="200" />
+  </a>
+</div>
