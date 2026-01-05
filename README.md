@@ -59,7 +59,14 @@ The extension registers a HttpHandler via the Montoya API that inspects HTTP res
 ## Customization
 The current regex used to discover endpoints is:
 ```bash
-['"](\/api\/[a-zA-Z0-9_\-/]+|\/v1\/[a-zA-Z0-9_\-/]+)['"]
+['"]?(\/api\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/v1\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/v2\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/v3\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/v4\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/v5\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/v6\/[a-zA-Z0-9_\-\/{}]+)['"]?
+['"]?(\/graphql[a-zA-Z0-9_\-\/]*)['"]?
 ```
 
 https://github.com/user-attachments/assets/41c4552b-6bdf-468b-8b5d-e42bf8602c35
