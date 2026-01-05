@@ -77,4 +77,3 @@ The current regex used to discover endpoints is:
 
 https://github.com/user-attachments/assets/41c4552b-6bdf-468b-8b5d-e42bf8602c35
 
-You can modify the apiPattern variable in ShadowApiVisualizer.java to customize this pattern for specific targets.
