@@ -63,6 +63,14 @@ For Live Traffic (HTTP History): In the handleHttpRequestToBeSent method, it tak
 For File Content (Scanning .js files): In the handleHttpResponseReceived method, it specifically checks if a response looks like a JavaScript file. If it does, it takes the entire text content of that file and runs the exact same combined regex pattern over it to find endpoint definitions like "/api/delete/".
 
 ## Customization
+
+The default regex patterns can be customized directly within Burp Suite.
+
+1. Go to the **Shadow Visualizer** tab.
+2. Click on the **Settings** sub-tab.
+3. Modify the patterns in the text area (one per line).
+4. Click **"Update Regex"** to apply your changes instantly.
+
 The current regex used to discover endpoints is:
 ```bash
 ['"]?(\/api\/[a-zA-Z0-9_\-\/{}]+)['"]?
