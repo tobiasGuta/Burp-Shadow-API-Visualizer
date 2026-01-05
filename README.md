@@ -56,6 +56,12 @@ Shadow API Visualizer automatically extracts these paths and presents them in a 
 ## How it Works
 The extension registers a HttpHandler via the Montoya API that inspects HTTP responses. If the response MIME type implies a script (JavaScript), it runs a regex pattern to find strings looking like API paths. It then compares these findings against live traffic to assign a status (Shadow vs. Verified).
 
+The extension uses that exact same list of regular expressions in two different places:
+1.
+For Live Traffic (HTTP History): In the handleHttpRequestToBeSent method, it takes the path of the outgoing request (e.g., /v3/users/123) and matches it against your combined regex pattern. This is for discovering and verifying endpoints from live requests.
+2.
+For File Content (Scanning .js files): In the handleHttpResponseReceived method, it specifically checks if a response looks like a JavaScript file. If it does, it takes the entire text content of that file and runs the exact same combined regex pattern over it to find endpoint definitions like "/api/delete/".
+
 ## Customization
 The current regex used to discover endpoints is:
 ```bash
